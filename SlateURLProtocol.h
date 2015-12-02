@@ -2,8 +2,8 @@
 //  SlateURLProtocol.h
 //  SlateCore
 //
-//  Created by yize lin on 15-3-25.
-//  Copyright (c) 2015年 Modern Mobile Digital Media Company Limited. All rights reserved.
+//  Created by yize lin on 12-7-10.
+//  Copyright (c) 2012年 Modern Mobile Digital Media Company Limited. All rights reserved.
 //
 
 #import <Foundation/Foundation.h>
@@ -14,6 +14,7 @@ NSString* const SlateURLProtocolFetchDateHeader;
 NSString* const SlateURLProtocolNoCacheHeader;
 NSString* const SlateURLProtocolIgnoreCacheControlHeadersHeader;
 NSString* const SlateURLProtocolCacheNoExpireHeader;
+NSString* const SlateURLProtocolCustomizedHeader;
 
 /**
  *  自定义NSURLProtocol

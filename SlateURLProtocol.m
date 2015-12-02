@@ -3,13 +3,15 @@
 //  SlateCore
 //
 //  Created by yize lin on 12-7-10.
-//  Copyright (c) 2015年 Modern Mobile Digital Media Company Limited. All rights reserved.
+//  Copyright (c) 2012年 Modern Mobile Digital Media Company Limited. All rights reserved.
 //
 
 #import "SlateURLProtocol.h"
 
 #import "SlateURLProtocolCache.h"
 #import "SlateReachability.h"
+#import "SlateAppInfo.h"
+#import "SlateHTTP.h"
 
 NSString* const SlateURLProtocolErrorDomain = @"SlateURLProtocolErrorDomain";
 NSString* const SlateURLProtocolRequest = @"SlateURLProtocolRequest";
@@ -19,6 +21,7 @@ NSString* const SlateURLProtocolFetchDateHeader = @"X-SlateURLProtocol-Fetch-dat
 NSString* const SlateURLProtocolNoCacheHeader = @"X-Slate-No-Cache";
 NSString* const SlateURLProtocolIgnoreCacheControlHeadersHeader = @"X-Slate-Ignore-Cache-Control-Headers";
 NSString* const SlateURLProtocolCacheNoExpireHeader = @"X-Slate-Cache-No-Expire";
+NSString* const SlateURLProtocolCustomizedHeader = @"X-Slate";
 
 NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
@@ -32,6 +35,7 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 @property (nonatomic, strong) NSString *cachePath;
 @property (nonatomic, strong) NSString *cacheHeaderPath;
 @property (nonatomic, assign) BOOL didUseCache;
+@property (nonatomic, assign) BOOL cacheable;
 
 - (BOOL)cacheExpiredReturnAge:(NSTimeInterval *)age;
 - (BOOL)hasCache;
@@ -63,11 +67,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
         return NO;
     }
 
-    if ([[request HTTPMethod] isEqualToString:@"POST"])
-    {
-        // 不拦截POST请求
-        return NO;
-    }
+//    if ([[request HTTPMethod] isEqualToString:@"POST"])
+//    {
+//        // 不拦截POST请求
+//        return NO;
+//    }
 
     if (request.URL.host.length == 0
         || [request.URL.host isEqualToString:@"localhost"]
@@ -78,11 +82,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
         return NO;
     }
     
-//    if ([[SlateURLProtocolCache defaultCache] isVideoUrl:request.URL.absoluteString])
-//    {
-//        // 不拦截视频请求
-//        return NO;
-//    }
+    if ([[SlateURLProtocolCache defaultCache] isVideoUrl:request.URL.absoluteString])
+    {
+        // 不拦截视频请求
+        return NO;
+    }
     
     if ([NSURLProtocol propertyForKey:SlateURLProtocolRequest inRequest:request] != nil)
     {
@@ -102,12 +106,25 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
         return NO;
     }
 
-    if ([[request.allHTTPHeaderFields objectForKey:@"X-Requested-With"] isEqualToString:@"XMLHttpRequest"])
+//    if ([[request.allHTTPHeaderFields objectForKey:@"X-Requested-With"] isEqualToString:@"XMLHttpRequest"])
+//    {
+//        // 不缓存 XHR请求
+//        return NO;
+//    }
+    
+    BOOL isPOST = ([[request HTTPMethod] isEqualToString:@"POST"]);
+    BOOL isXHR = ([[request.allHTTPHeaderFields objectForKey:@"X-Requested-With"] isEqualToString:@"XMLHttpRequest"]);
+    BOOL hasCustomizedHeader = ([request.allHTTPHeaderFields objectForKey:SlateURLProtocolCustomizedHeader] != nil);
+    if ((isPOST || isXHR) && hasCustomizedHeader)
     {
-        // 不缓存 XHR请求
+        // 不缓存已经自定义头部的POST、XHR请求
+//        ALog(@"no cache %@ %@ ====== %@",
+//             request.HTTPMethod,
+//             [request.allHTTPHeaderFields objectForKey:@"X-Requested-With"],
+//             request.URL.absoluteString);
         return NO;
     }
-
+    
     //NSLog(@"------请求被缓存了--------");
     
     // 拦截所有其他请求    linyize 2013.9.12
@@ -124,6 +141,12 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
     NSMutableURLRequest* newRequest = [request mutableCopy];
     [NSURLProtocol setProperty:@"1" forKey:SlateURLProtocolRequest inRequest:newRequest];
     
+    // 自定义头部
+    if (![newRequest.allHTTPHeaderFields objectForKey:SlateURLProtocolCustomizedHeader])
+    {
+        [SlateHTTP setHttpHeaderWithRequest:newRequest];
+    }
+    
     // Now continue the process with this "tagged" request
     self = [super initWithRequest:newRequest
                    cachedResponse:cachedResponse
@@ -131,8 +154,15 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
     if (self)
     {
         self.mutableRequest = newRequest;
-        self.receivedData = [NSMutableData data];
         self.didUseCache = NO;
+        
+        BOOL isPOST = ([[newRequest HTTPMethod] isEqualToString:@"POST"]);
+        BOOL isXHR = ([[newRequest.allHTTPHeaderFields objectForKey:@"X-Requested-With"] isEqualToString:@"XMLHttpRequest"]);
+        self.cacheable = !(isPOST || isXHR);
+        if (self.cacheable)
+        {
+            self.receivedData = [NSMutableData data];
+        }
     }
     
     return self;
@@ -140,38 +170,48 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
 - (void)startLoading
 {
-    self.cachePath = [[SlateURLProtocolCache defaultCache] cachePathWithURL:self.request.URL];
-    self.cacheHeaderPath = [self.cachePath stringByAppendingString:@".header"];
-    
-    if ([self hasCache])
+    if (self.cacheable)
     {
-        NSTimeInterval currentAge = 0;
+        self.cachePath = [[SlateURLProtocolCache defaultCache] cachePathWithURL:self.request.URL];
+        self.cacheHeaderPath = [self.cachePath stringByAppendingString:@".header"];
         
-        if ([self cacheNoExpire])
+        if ([self hasCache])
         {
-            // 不判断是否过期，直接读缓存
-            [self readCache];
-            return;
-        }
-        else if (![self cacheExpiredReturnAge:&currentAge])
-        {
-            // 缓存未过期，并在8小时之内，信任header，读取缓存
-            if (currentAge < SlateURLProtocolLocalMaxAge)
+            NSTimeInterval currentAge = 0;
+            
+            if ([self cacheNoExpire])
             {
+                // 不判断是否过期，直接读缓存
                 [self readCache];
                 return;
             }
+            else if (![self cacheExpiredReturnAge:&currentAge])
+            {
+                // 缓存未过期，并在8小时之内，信任header，读取缓存
+                if (currentAge < SlateURLProtocolLocalMaxAge)
+                {
+                    [self readCache];
+                    return;
+                }
+            }
+            
+            // 如果缓存过期，或者超过8小时，使用conditional GET，问HTTP服务器是否需要更新
+            [self setConditionalGETHeaders];
+            
+            DLog(@"SlateURLProtocol update ====== %@", self.request.URL.absoluteString);
         }
-        
-        // 如果缓存过期，或者超过8小时，使用conditional GET，问HTTP服务器是否需要更新
-        [self setConditionalGETHeaders];
-        
-        NSLog(@"SlateURLProtocol update ====== %@", self.request.URL.absoluteString);
+        else
+        {
+            DLog(@"SlateURLProtocol new ====== %@", self.request.URL.absoluteString);
+        }
     }
-    else
-    {
-        NSLog(@"SlateURLProtocol new====== %@", self.request.URL.absoluteString);
-    }
+//    else
+//    {
+//        ALog(@"SlateURLProtocol %@ %@ ====== %@",
+//             self.request.HTTPMethod,
+//             [self.request.allHTTPHeaderFields objectForKey:@"X-Requested-With"],
+//             self.request.URL.absoluteString);
+//    }
     
     // 下载
     [self setConnection:[NSURLConnection connectionWithRequest:self.request delegate:self]];
@@ -193,7 +233,8 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
         [NSURLProtocol removePropertyForKey:SlateURLProtocolRequest inRequest:redirectableRequest];
         
-        if ([response isKindOfClass:[NSHTTPURLResponse class]])
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]
+            && self.cacheable)
         {
             self.response = (NSHTTPURLResponse *)response;
             [self writeCache:self.response redirectRequest:redirectableRequest];
@@ -210,14 +251,19 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
 - (void)connection:(NSURLConnection*)conn didReceiveResponse:(NSURLResponse*)response 
 {
-    if ([response isKindOfClass:[NSHTTPURLResponse class]])
+    if ([response isKindOfClass:[NSHTTPURLResponse class]]
+        && self.cacheable)
     {
         self.response = (NSHTTPURLResponse *)response;
         if (self.response.statusCode == 304)
         {
-            NSLog(@"SlateURLProtocol HTTP 304 Not Modified =------------- %@", self.request.URL.absoluteString);
-            [self readCache];
-            return;
+            DLog(@"SlateURLProtocol HTTP 304 Not Modified =------------- %@", self.request.URL.absoluteString);
+            
+            if ([self hasCache])
+            {
+                [self readCache];
+                return;
+            }
         }
         
         self.responseHTTPHeaders = self.response.allHeaderFields;
@@ -226,7 +272,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
     [[self client] URLProtocol:self
             didReceiveResponse:response 
             cacheStoragePolicy:NSURLCacheStorageNotAllowed];
-    [self.receivedData setLength:0];
+    
+    if (self.cacheable)
+    {
+        [self.receivedData setLength:0];
+    }
 }
 
 - (void)connection:(NSURLConnection*)connection didReceiveData:(NSData*)data
@@ -237,7 +287,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
     }
     
     [[self client] URLProtocol:self didLoadData:data];
-    [self.receivedData appendData:data];
+    
+    if (self.cacheable)
+    {
+        [self.receivedData appendData:data];
+    }
 }
 
 - (void)connectionDidFinishLoading:(NSURLConnection*)conn
@@ -251,36 +305,39 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
     
     [[self client] URLProtocolDidFinishLoading:self];
     
-    if ([self.response statusCode] / 100 == 2)
+    if (self.cacheable)
     {
-        // 接收到数据。 HTTP状态码 200/206
-        
-        BOOL isResponseCompressed = [SlateURLProtocolCache isResponseCompressed:self.responseHTTPHeaders];
-        BOOL allowsCaching = [[self class] allowsCaching:self.responseHTTPHeaders];
-        BOOL ignoreCacheControlHeaders = ([self.request.allHTTPHeaderFields objectForKey:SlateURLProtocolIgnoreCacheControlHeadersHeader] != nil);
-        BOOL cacheNoExpire = ([self.request.allHTTPHeaderFields objectForKey:SlateURLProtocolCacheNoExpireHeader] != nil);
-        NSUInteger contentLength = [[self.responseHTTPHeaders objectForKey:@"Content-Length"] intValue];
-        
-        if (contentLength == 0
-            || isResponseCompressed
-            || (contentLength == self.receivedData.length && self.receivedData.length > 0) )
+        if ([self.response statusCode] / 100 == 2)
         {
-            // 下载完整
-            if (allowsCaching || ignoreCacheControlHeaders || cacheNoExpire)
+            // 接收到数据。 HTTP状态码 200/206
+            
+            BOOL isResponseCompressed = [SlateURLProtocolCache isResponseCompressed:self.responseHTTPHeaders];
+            BOOL allowsCaching = [[self class] allowsCaching:self.responseHTTPHeaders];
+            BOOL ignoreCacheControlHeaders = ([self.request.allHTTPHeaderFields objectForKey:SlateURLProtocolIgnoreCacheControlHeadersHeader] != nil);
+            BOOL cacheNoExpire = ([self.request.allHTTPHeaderFields objectForKey:SlateURLProtocolCacheNoExpireHeader] != nil);
+            NSUInteger contentLength = [[self.responseHTTPHeaders objectForKey:@"Content-Length"] intValue];
+            
+            if (contentLength == 0
+                || isResponseCompressed
+                || (contentLength == self.receivedData.length && self.receivedData.length > 0) )
             {
-                [self writeCache:self.response redirectRequest:nil];
+                // 下载完整
+                if (allowsCaching || ignoreCacheControlHeaders || cacheNoExpire)
+                {
+                    [self writeCache:self.response redirectRequest:nil];
+                }
+            }
+            else
+            {
+                // 下载不完整?
+                DLog(@"SlateURLProtocol HTTP %ld incomplete %lu/%lu =------------- %@", (long)self.response.statusCode, (unsigned long)self.receivedData.length, (unsigned long)contentLength, self.response.URL);
             }
         }
         else
         {
-            // 下载不完整?
-            NSLog(@"SlateURLProtocol HTTP %ld incomplete %lu/%lu =------------- %@", (long)self.response.statusCode, (unsigned long)self.receivedData.length, (unsigned long)contentLength, self.response.URL);
+            // 没有接收到数据。 HTTP状态码 304/404/500/503
+            DLog(@"SlateURLProtocol HTTP %ld =------------- %@", (long)self.response.statusCode, self.response.URL);
         }
-    }
-    else
-    {
-        // 没有接收到数据。 HTTP状态码 304/404/500/503
-        NSLog(@"SlateURLProtocol HTTP %ld =------------- %@", (long)self.response.statusCode, self.response.URL);
     }
 }
 
@@ -291,7 +348,7 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
         return;
     }
     
-    if ([self hasCache])
+    if (self.cacheable && [self hasCache])
     {
         [self readCache];
         return;
@@ -305,11 +362,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
 - (BOOL)cacheNoExpire
 {
-//    if ([WBAppInfo sharedInfo].appMode == WBAppModeEditor)
-//    {
-//        // 编辑版，每次都刷新数据
-//        return NO;
-//    }
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"SlateUseCache"])
+    {
+        // 不使用缓存，每次都刷新数据
+        return NO;
+    }
     
     BOOL cacheNoExpire = ([self.request.allHTTPHeaderFields objectForKey:SlateURLProtocolCacheNoExpireHeader] != nil);
     return cacheNoExpire;
@@ -317,11 +374,11 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 
 - (BOOL)cacheExpiredReturnAge:(NSTimeInterval *)age
 {
-//    if ([SlateAppInfo sharedInfo].appMode == WBAppModeEditor)
-//    {
-//        // 编辑版，每次都刷新数据
-//        return YES;
-//    }
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"SlateUseCache"])
+    {
+        // 不使用缓存，每次都刷新数据
+        return YES;
+    }
     
     if ([[SlateReachability sharedReachability] isNetworkBroken])
     {
@@ -336,12 +393,12 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
         return [[self class] cacheExpires:cachedHeaders age:age];
     }
     
-//    if ([self.cachePath hasPrefix:kWBCachesDirectory])
-//    {
-//        // 期刊内容缓存不过期
-//        // todo: 张磊:一天以后过期？ 以updatetime为准  林溢泽  2014.9.18
-//        return NO;
-//    }
+    if ([self.cachePath hasPrefix:kSlateCachesDirectory])
+    {
+        // 期刊内容缓存不过期
+        // todo: 张磊:一天以后过期？ 以updatetime为准  林溢泽  2014.9.18
+        return NO;
+    }
 
     return YES;
 }
@@ -454,6 +511,7 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 // response是否允许缓存
 + (BOOL)allowsCaching:(NSDictionary *)responseHeaders
 {
+    /** 忽略cache-control 统一缓存
 	NSString *cacheControl = [[responseHeaders objectForKey:@"Cache-Control"] lowercaseString];
 	if (cacheControl)
     {
@@ -471,6 +529,7 @@ NSTimeInterval const SlateURLProtocolLocalMaxAge = 60 * 60 * 8;
 			return NO;
 		}
 	}
+     */
 	return YES;
 }
 

@@ -3,18 +3,27 @@
 //  SlateCore
 //
 //  Created by yize lin on 12-7-19.
-//  Copyright (c) 2015年 Modern Mobile Digital Media Company Limited. All rights reserved.
+//  Copyright (c) 2012年 Modern Mobile Digital Media Company Limited. All rights reserved.
 //
 
 #import "SlateURLProtocolCache.h"
 
+//#import "SlateOfflineVideoManager.h"
+#import "SlateAppInfo.h"
 #import "SlateURLProtocol.h"
-#import "NSString+md5.h"
+#import "SlateUtils.h"
 
 @interface SlateURLProtocolCache ()
 
 @property (nonatomic, strong) NSString *urlCacheFolderName;
 @property (nonatomic, strong) NSString *urlCachePath;
+@property (nonatomic, strong) NSString *packageCacheFolderName;
+@property (nonatomic, strong) NSString *packageCachePath;
+@property (nonatomic, strong) NSString *pdfCacheFolderName;
+@property (nonatomic, strong) NSString *pdfCachePath;
+
+- (BOOL)isImageUrl:(NSString *)urlString;
+- (BOOL)isPdfUrl:(NSString *)urlString;
 
 @end
 
@@ -37,9 +46,49 @@
     if (self)
     {
         _urlCacheFolderName = @"URLCache";
-        _urlCachePath = [[NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0] stringByAppendingPathComponent:_urlCacheFolderName];
+        _packageCacheFolderName = @"PackageCache";
+        _pdfCacheFolderName = @"PDFCache";
+        _urlCachePath = [kCachesDirectory stringByAppendingPathComponent:_urlCacheFolderName];
+        _packageCachePath = [kCachesDirectory stringByAppendingPathComponent:_packageCacheFolderName];
+        _pdfCachePath = [kCachesDirectory stringByAppendingPathComponent:_pdfCacheFolderName];
     }
     return self;
+}
+
+- (void)setPackageCacheFolderName:(NSString *)folderName
+{
+    _packageCacheFolderName = folderName;
+    _packageCachePath = [kCachesDirectory stringByAppendingPathComponent:folderName];
+}
+
+- (BOOL)isVideoUrl:(NSString *)urlString
+{
+    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
+    if (!pathExtension)
+    {
+        return NO;
+    }
+    return ([@"m3u8|m4v|mov|mp4|avi|mpg|mpeg|3gp|ts" rangeOfString:pathExtension].location != NSNotFound);
+}
+
+- (BOOL)isImageUrl:(NSString *)urlString
+{
+    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
+    if (!pathExtension)
+    {
+        return NO;
+    }
+    return ([@"png|jpg|gif|jpeg|webp" rangeOfString:pathExtension].location != NSNotFound);
+}
+
+- (BOOL)isPdfUrl:(NSString *)urlString
+{
+    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
+    if (!pathExtension)
+    {
+        return NO;
+    }
+    return [pathExtension isEqualToString:@"pdf"];
 }
 
 - (NSString *)cachePathWithURL:(NSURL *)url
@@ -47,6 +96,76 @@
     if (url == nil)
     {
         return @"";
+    }
+    
+    BOOL isImage = NO;
+    NSString *relativePath = nil;
+    NSString *urlString = url.absoluteString;
+    
+//    if ([SlateOfflineVideoManager isVideoURL:[NSURL URLWithString:urlString]])
+//    {
+//        return [SlateOfflineVideoManager cachePathWithURL:[NSURL URLWithString:urlString]];
+//    }
+
+    if ([self isPdfUrl:urlString])
+    {
+        NSString *cachePath = [_pdfCachePath stringByAppendingPathComponent:url.host];
+        NSString *fileName = [NSString stringWithFormat:@"%@.pdf", [url.absoluteString md5]];
+        return [cachePath stringByAppendingPathComponent:fileName];
+    }
+    
+    NSRange range1 = [urlString rangeOfString:@"/statics/"];
+    NSRange range2 = [urlString rangeOfString:@"/slateInterface/"];
+    NSRange range3 = [urlString rangeOfString:@"/uploadfile/"];
+    NSRange range4 = [urlString rangeOfString:@"/issue_"];
+
+    BOOL packageCache = NO;
+    if (range1.length > 0)
+    {
+        packageCache = YES;
+        relativePath = [urlString substringFromIndex:range1.location];
+    }
+    else if (range2.length > 0)
+    {
+        relativePath = [urlString substringFromIndex:range2.location];
+        
+        if ([self isImageUrl:urlString])
+        {
+            isImage = YES;
+            packageCache = YES;
+        }
+        else
+        {
+            if ([urlString rangeOfString:@"updatetime"].location != NSNotFound)
+            {
+                packageCache = YES;
+            }
+        }
+    }
+    else if (range3.length > 0)
+    {
+        packageCache = YES;
+        relativePath = [urlString substringFromIndex:range3.location];
+    }
+    else if (range4.length > 0)
+    {
+        if ([self isImageUrl:urlString])
+        {
+            isImage = YES;
+            packageCache = YES;
+            relativePath = [urlString substringFromIndex:range4.location];
+        }
+    }
+
+    if (packageCache)
+    {
+        // 与解压包相同的存储路径，为了支持打包下载
+        NSString *cachePath = _packageCachePath;
+        if (isImage)
+        {
+            cachePath = [cachePath stringByAppendingPathComponent:@"pictures"];
+        }
+        return [cachePath stringByAppendingPathComponent:relativePath];
     }
 
     // 通用存储路径
@@ -124,9 +243,27 @@
 
 - (void)clearCache
 {
+    [[NSFileManager defaultManager] removeItemAtPath:_pdfCachePath error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:_packageCachePath error:nil];
     [[NSFileManager defaultManager] removeItemAtPath:_urlCachePath error:nil];
 }
 
+- (void)clearOldCaches
+{
+    NSArray *array = @[@"SlateURLProtocolCache",@"SlateCache"];
+    for (NSString *name in array)
+    {
+        NSString *path = [kCachesDirectory stringByAppendingPathComponent:name];
+        BOOL isDirectory = NO;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory])
+        {
+            if (isDirectory)
+            {
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            }
+        }
+    }
+}
 
 #pragma mark - HTTP协议
 

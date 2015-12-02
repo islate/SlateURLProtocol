@@ -3,7 +3,7 @@
 //  SlateCore
 //
 //  Created by yize lin on 12-7-19.
-//  Copyright (c) 2015年 Modern Mobile Digital Media Company Limited. All rights reserved.
+//  Copyright (c) 2012年 Modern Mobile Digital Media Company Limited. All rights reserved.
 //
 
 #import <Foundation/Foundation.h>
@@ -26,7 +26,13 @@
 - (void)writeCacheHeader:(NSDictionary *)responseHeaders cachePath:(NSString *)cachePath requestURL:(NSURL *)requestURL redirectRequestURL:(NSURL *)redirectRequestURL;
 
 - (void)clearCache;
+- (void)clearOldCaches;
+
+- (BOOL)isVideoUrl:(NSString *)urlString;
 
 + (BOOL)isResponseCompressed:(NSDictionary *)responseHeaders;
+
+- (NSString *)packageCachePath;
+- (void)setPackageCacheFolderName:(NSString *)folderName;
 
 @end
