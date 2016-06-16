@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.source           = { :git => "https://github.com/islate/SlateURLProtocol.git", :tag => s.version.to_s }
   s.platform     = :ios, '7.0'
   s.requires_arc = true
-  s.source_files = '*.{h,m}'
+  s.source_files = 'SlateURLProtocol/*.{h,m}'
   s.dependency 'SlateReachability'
   s.dependency 'SlateUtils'
 end
