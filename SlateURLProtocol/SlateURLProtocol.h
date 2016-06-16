@@ -8,13 +8,15 @@
 
 #import <Foundation/Foundation.h>
 
-NSString* const SlateURLProtocolRedirectURLHeader;
-NSString* const SlateURLProtocolFetchURLHeader;
-NSString* const SlateURLProtocolFetchDateHeader;
-NSString* const SlateURLProtocolNoCacheHeader;
-NSString* const SlateURLProtocolIgnoreCacheControlHeadersHeader;
-NSString* const SlateURLProtocolCacheNoExpireHeader;
-NSString* const SlateURLProtocolCustomizedHeader;
+#import "SlateURLProtocolCache.h"
+
+extern NSString* const SlateURLProtocolRedirectURLHeader;
+extern NSString* const SlateURLProtocolFetchURLHeader;
+extern NSString* const SlateURLProtocolFetchDateHeader;
+extern NSString* const SlateURLProtocolNoCacheHeader;
+extern NSString* const SlateURLProtocolIgnoreCacheControlHeadersHeader;
+extern NSString* const SlateURLProtocolCacheNoExpireHeader;
+extern NSString* const SlateURLProtocolCustomizedHeader;
 
 /**
  *  自定义NSURLProtocol
@@ -23,6 +25,14 @@ NSString* const SlateURLProtocolCustomizedHeader;
  */
 @interface SlateURLProtocol : NSURLProtocol
 
-+ (void) registerClass;
+/*
+ *  注册类，开始拦截请求
+ */
++ (void)registerClass;
+
+/*
+ *  自定义http请求头部信息。
+ */
++ (void)setCustomHttpHeaders:(NSDictionary<NSString *, NSString *> *)HTTPHeaders;
 
 @end

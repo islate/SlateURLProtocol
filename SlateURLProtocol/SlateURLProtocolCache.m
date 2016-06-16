@@ -8,22 +8,15 @@
 
 #import "SlateURLProtocolCache.h"
 
-//#import "SlateOfflineVideoManager.h"
-#import "SlateAppInfo.h"
 #import "SlateURLProtocol.h"
 #import "SlateUtils.h"
 
 @interface SlateURLProtocolCache ()
 
-@property (nonatomic, strong) NSString *urlCacheFolderName;
-@property (nonatomic, strong) NSString *urlCachePath;
-@property (nonatomic, strong) NSString *packageCacheFolderName;
-@property (nonatomic, strong) NSString *packageCachePath;
-@property (nonatomic, strong) NSString *pdfCacheFolderName;
-@property (nonatomic, strong) NSString *pdfCachePath;
-
-- (BOOL)isImageUrl:(NSString *)urlString;
-- (BOOL)isPdfUrl:(NSString *)urlString;
+@property (nonatomic, strong) NSMutableArray *cacheRules;
+@property (nonatomic, strong) NSString *defaultCacheFolderName;
+@property (nonatomic, strong) NSString *defaultCachePath;
+@property (nonatomic, strong) NSString *cachesDirectory;
 
 @end
 
@@ -31,7 +24,7 @@
 
 + (instancetype)defaultCache
 {
-    static id               _sharedInstance = nil;
+    static id _sharedInstance = nil;
     static dispatch_once_t  once = 0;
     
     dispatch_once(&once, ^{
@@ -45,50 +38,37 @@
     self = [super init];
     if (self)
     {
-        _urlCacheFolderName = @"URLCache";
-        _packageCacheFolderName = @"PackageCache";
-        _pdfCacheFolderName = @"PDFCache";
-        _urlCachePath = [kCachesDirectory stringByAppendingPathComponent:_urlCacheFolderName];
-        _packageCachePath = [kCachesDirectory stringByAppendingPathComponent:_packageCacheFolderName];
-        _pdfCachePath = [kCachesDirectory stringByAppendingPathComponent:_pdfCacheFolderName];
+        _cachesDirectory = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0];
+        _cacheRules = [NSMutableArray new];
+        _defaultCacheFolderName = @"URLCache";
+        _defaultCachePath = [_cachesDirectory stringByAppendingPathComponent:_defaultCacheFolderName];
     }
     return self;
 }
 
-- (void)setPackageCacheFolderName:(NSString *)folderName
+- (void)addCacheRuleWithFolderName:(NSString *)folderName filter:(BOOL (^)(NSURL *url))filter saveTo:(NSString * (^)(NSURL *url, NSString *parentPath))saveTo isPermanent:(BOOL)isPermanent
 {
-    _packageCacheFolderName = folderName;
-    _packageCachePath = [kCachesDirectory stringByAppendingPathComponent:folderName];
+    NSDictionary *cacheRule = @{@"folderName": folderName, @"filter":filter, @"saveTo":saveTo, @"isPermanent":@(isPermanent)};
+    [_cacheRules addObject:cacheRule];
 }
 
-- (BOOL)isVideoUrl:(NSString *)urlString
+- (BOOL)isPermanentCachePath:(NSString *)path
 {
-    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
-    if (!pathExtension)
+    for (NSDictionary *cacheRule in _cacheRules)
     {
-        return NO;
+        NSString *folderName = [cacheRule objectForKey:@"folderName"];
+        BOOL isPermanent = [[cacheRule objectForKey:@"isPermanent"] boolValue];
+        if (!isPermanent || !folderName)
+        {
+            continue;
+        }
+        NSString *parentPath = [_cachesDirectory stringByAppendingPathComponent:folderName];
+        if ([path hasPrefix:parentPath])
+        {
+            return YES;
+        }
     }
-    return ([@"m3u8|m4v|mov|mp4|avi|mpg|mpeg|3gp|ts" rangeOfString:pathExtension].location != NSNotFound);
-}
-
-- (BOOL)isImageUrl:(NSString *)urlString
-{
-    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
-    if (!pathExtension)
-    {
-        return NO;
-    }
-    return ([@"png|jpg|gif|jpeg|webp" rangeOfString:pathExtension].location != NSNotFound);
-}
-
-- (BOOL)isPdfUrl:(NSString *)urlString
-{
-    NSString *pathExtension = [[urlString pathExtension] lowercaseString];
-    if (!pathExtension)
-    {
-        return NO;
-    }
-    return [pathExtension isEqualToString:@"pdf"];
+    return NO;
 }
 
 - (NSString *)cachePathWithURL:(NSURL *)url
@@ -98,78 +78,27 @@
         return @"";
     }
     
-    BOOL isImage = NO;
-    NSString *relativePath = nil;
-    NSString *urlString = url.absoluteString;
-    
-//    if ([SlateOfflineVideoManager isVideoURL:[NSURL URLWithString:urlString]])
-//    {
-//        return [SlateOfflineVideoManager cachePathWithURL:[NSURL URLWithString:urlString]];
-//    }
-
-    if ([self isPdfUrl:urlString])
+    // 自定义缓存规则
+    for (NSDictionary *cacheRule in _cacheRules)
     {
-        NSString *cachePath = [_pdfCachePath stringByAppendingPathComponent:url.host];
-        NSString *fileName = [NSString stringWithFormat:@"%@.pdf", [url.absoluteString md5]];
-        return [cachePath stringByAppendingPathComponent:fileName];
-    }
-    
-    NSRange range1 = [urlString rangeOfString:@"/statics/"];
-    NSRange range2 = [urlString rangeOfString:@"/slateInterface/"];
-    NSRange range3 = [urlString rangeOfString:@"/uploadfile/"];
-    NSRange range4 = [urlString rangeOfString:@"/issue_"];
-
-    BOOL packageCache = NO;
-    if (range1.length > 0)
-    {
-        packageCache = YES;
-        relativePath = [urlString substringFromIndex:range1.location];
-    }
-    else if (range2.length > 0)
-    {
-        relativePath = [urlString substringFromIndex:range2.location];
-        
-        if ([self isImageUrl:urlString])
+        NSString *folderName = [cacheRule objectForKey:@"folderName"];
+        BOOL (^filter)(NSURL *url) = [cacheRule objectForKey:@"filter"];
+        NSString *(^saveTo)(NSURL *url, NSString *parentPath) = [cacheRule objectForKey:@"saveTo"];
+        if (!filter || !saveTo || !folderName)
         {
-            isImage = YES;
-            packageCache = YES;
+            continue;
         }
-        else
+        if (!filter(url))
         {
-            if ([urlString rangeOfString:@"updatetime"].location != NSNotFound)
-            {
-                packageCache = YES;
-            }
+            continue;
         }
-    }
-    else if (range3.length > 0)
-    {
-        packageCache = YES;
-        relativePath = [urlString substringFromIndex:range3.location];
-    }
-    else if (range4.length > 0)
-    {
-        if ([self isImageUrl:urlString])
-        {
-            isImage = YES;
-            packageCache = YES;
-            relativePath = [urlString substringFromIndex:range4.location];
-        }
+        NSString *parentPath = [_cachesDirectory stringByAppendingPathComponent:folderName];
+        NSString *cachePath = saveTo(url, parentPath);
+        return cachePath;
     }
 
-    if (packageCache)
-    {
-        // 与解压包相同的存储路径，为了支持打包下载
-        NSString *cachePath = _packageCachePath;
-        if (isImage)
-        {
-            cachePath = [cachePath stringByAppendingPathComponent:@"pictures"];
-        }
-        return [cachePath stringByAppendingPathComponent:relativePath];
-    }
-
-    // 通用存储路径
-    NSString *cachePath = [_urlCachePath stringByAppendingPathComponent:url.host];
+    // 默认存储路径
+    NSString *cachePath = [_defaultCachePath stringByAppendingPathComponent:url.host];
     return [cachePath stringByAppendingPathComponent:[url.absoluteString md5]];
 }
 
@@ -243,26 +172,17 @@
 
 - (void)clearCache
 {
-    [[NSFileManager defaultManager] removeItemAtPath:_pdfCachePath error:nil];
-    [[NSFileManager defaultManager] removeItemAtPath:_packageCachePath error:nil];
-    [[NSFileManager defaultManager] removeItemAtPath:_urlCachePath error:nil];
-}
-
-- (void)clearOldCaches
-{
-    NSArray *array = @[@"SlateURLProtocolCache",@"SlateCache"];
-    for (NSString *name in array)
+    for (NSDictionary *cacheRule in _cacheRules)
     {
-        NSString *path = [kCachesDirectory stringByAppendingPathComponent:name];
-        BOOL isDirectory = NO;
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory])
+        NSString *folderName = [cacheRule objectForKey:@"folderName"];
+        if (!folderName)
         {
-            if (isDirectory)
-            {
-                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-            }
+            continue;
         }
+        NSString *parentPath = [_cachesDirectory stringByAppendingPathComponent:folderName];
+        [[NSFileManager defaultManager] removeItemAtPath:parentPath error:nil];
     }
+    [[NSFileManager defaultManager] removeItemAtPath:_defaultCachePath error:nil];
 }
 
 #pragma mark - HTTP协议
