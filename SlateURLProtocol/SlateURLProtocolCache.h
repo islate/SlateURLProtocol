@@ -3,7 +3,7 @@
 //  SlateCore
 //
 //  Created by yize lin on 12-7-19.
-//  Copyright (c) 2012年 Modern Mobile Digital Media Company Limited. All rights reserved.
+//  Copyright (c) 2012年 islate. All rights reserved.
 //
 
 #import <Foundation/Foundation.h>
